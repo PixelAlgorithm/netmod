@@ -1,6 +1,7 @@
 from langchain_core.messages import AIMessage,BaseMessage,HumanMessage,SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import START,END,StateGraph
+from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from typing import TypedDict,List,Sequence,Annotated
 from langchain_openai import ChatOpenAI
@@ -153,7 +154,7 @@ Your response must begin with { and end with }."""
 
 
 class AgentState(TypedDict):
-    user_intent: str
+    messages: Annotated[list, add_messages]
     structured_intent: dict
     config: str
     validation_result: str
@@ -163,7 +164,7 @@ model = ChatOpenAI(model="qwen/qwen3-8b",base_url="http://127.0.0.1:1234/v1",api
 
 def intent_agent(state : AgentState)-> AgentState:
     system_prompt = SystemMessage(content=prompt)
-    all_msg =[system_prompt,HumanMessage(content =state['user_intent'])]
+    all_msg = [system_prompt] + state['messages']
     response = model.invoke(all_msg)
     
     content = response.content.strip()
@@ -188,11 +189,16 @@ def route_intent(state):
 def clarification_node(state: AgentState) -> AgentState:
     questions = state["structured_intent"]["questions"]
     print("\n[Agent needs clarification]")
+    
     for i, q in enumerate(questions, 1):
-        print(f"  {i}. {q}")
-        answer = input("\nYour answer: ")
-        state["user_intent"] = state["user_intent"] + "\n" + answer
-  
+        print(f"\n  {i}. {q}")
+        answer = input("Your answer: ")
+        # each Q&A pair added as AIMessage → HumanMessage
+        state["messages"] = state["messages"] + [
+            AIMessage(content=q),
+            HumanMessage(content=answer)
+        ]
+    
     return state
 
 graph = StateGraph(AgentState)
@@ -212,12 +218,11 @@ graph.add_edge("ready", END)
 
 app = graph.compile()
 
-app.invoke(
+result=app.invoke(
 {
-    'user_intent': input("what u like to create : "),
-    'structured_intent': {},
-    'config': "",
-    'validation_result': ""
-    
+    'messages': [HumanMessage(content=input("what u like to create : "))]
 }
 )    
+
+print("\n--------Agent Finished -------\n")
+print(result['structured_intent'])
