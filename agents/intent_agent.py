@@ -1,10 +1,4 @@
-from langchain_core.messages import AIMessage,BaseMessage,HumanMessage,SystemMessage
-from langchain_core.tools import tool
-from langgraph.graph import START,END,StateGraph
-from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
-from typing import TypedDict,List,Sequence,Annotated
-from langchain_openai import ChatOpenAI
+from common import AgentState, model
 import json
 
 prompt =""" 
@@ -152,16 +146,6 @@ Do NOT wrap JSON inside ```json.
 Your response must begin with { and end with }."""
 
 
-
-class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]
-    structured_intent: dict
-    config: str
-    validation_result: str
-
-model = ChatOpenAI(model="qwen/qwen3-8b",base_url="http://127.0.0.1:1234/v1",api_key="sk-lm-EJjPzE1o:6W4624mlXHx6NbrnC10r")
-
-
 def intent_agent(state : AgentState)-> AgentState:
     system_prompt = SystemMessage(content=prompt)
     all_msg = [system_prompt] + state['messages']
@@ -226,3 +210,4 @@ result=app.invoke(
 
 print("\n--------Agent Finished -------\n")
 print(result['structured_intent'])
+
