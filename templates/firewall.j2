@@ -1,6 +1,10 @@
+! Cisco IOS Configuration
+version 15.2
+hostname {{ device_hostname | default("FIREWALL") }}
+!
 {% for obj in network_objects %}
 {% if obj.type == "zone" %}
-zone {{ obj.name }}
+zone security {{ obj.name }}
 {% if obj.interfaces is defined %}
 {% for intf in obj.interfaces %}
  interface {{ intf }}
@@ -10,8 +14,22 @@ zone {{ obj.name }}
 {% endif %}
 {% endfor %}
 
-{# security_policies (allow/deny rules) intentionally skipped — pending object/subnet resolution #}
+{% for policy in security_policies %}
+{% if policy.action == "allow" %}
+{% set acl_action = "permit" %}
+{% else %}
+{% set acl_action = "deny" %}
+{% endif %}
+{% if policy.destination == "internet" %}
+{% set dest = "any" %}
+{% else %}
+{% set dest = policy.destination | network_addr + " " + (policy.destination | wildcard) %}
+{% endif %}
+access-list 101 {{ acl_action }} {{ policy.protocol | default("tcp") }} {% if policy.source and policy.source != "any" %}{{ policy.source | network_addr }} {{ policy.source | wildcard }}{% else %}any{% endif %} {{ dest }}{% if policy.port is defined %} eq {{ policy.port }}{% endif %}
+{% endfor %}
 
 {% for constraint in constraints %}
-constraint: {{ constraint }}
+! constraint: {{ constraint }}
 {% endfor %}
+
+end

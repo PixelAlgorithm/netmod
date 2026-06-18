@@ -27,7 +27,7 @@ CRITICAL RULES
 NETWORK_OBJECTS SCHEMA RULES
 
 network_objects is a list of TOP-LEVEL objects only. Each object's "type" field
-MUST be one of: "vlan", "acl", "route". No other type values are allowed.
+MUST be one of: "vlan", "acl". No other type values are allowed.
 
 Subnet, gateway, and DNS information are NOT separate network_objects.
 They are FIELDS on the relevant "vlan" object:
@@ -48,21 +48,6 @@ still counts as missing critical information — ask for the VLAN ID.
 
 ACL objects ("type": "acl") carry their own "rules" list as before, and are
 never merged into a vlan object.
-
-ROUTING SCHEMA RULES (intent_type = "configure_routing")
-
-For routing requests, network_objects entries use "type": "route":
-
-  {
-    "type": "route",
-    "destination": "172.20.0.0/16",
-    "next_hop": "192.168.1.254"
-  }
-
-Both "destination" (a CIDR block) and "next_hop" (an IP address) are
-required for a route object. If either is missing, treat this as missing
-critical information and ask for it via clarification. Never invent a
-destination or next_hop.
 
 SECURITY_POLICIES SCHEMA RULES
 
@@ -265,46 +250,6 @@ Output:
   }
 }
 
-User:
-Configure static routing on a router. Add a static route to 172.20.0.0/16
-via next-hop 192.168.1.254.
-
-Output:
-
-{
-  "status": "ready",
-  "intent": {
-    "intent_type": "configure_routing",
-    "network_objects": [
-      {
-        "type": "route",
-        "destination": "172.20.0.0/16",
-        "next_hop": "192.168.1.254"
-      }
-    ],
-    "actions": [
-      "add_static_route"
-    ],
-    "constraints": [],
-    "security_policies": [],
-    "deployment_target": "router",
-    "description": "Static route to 172.20.0.0/16 via next-hop 192.168.1.254."
-  }
-}
-
-User:
-Configure routing on a router.
-
-Output:
-
-{
-  "status": "needs_clarification",
-  "questions": [
-    "What is the destination network (CIDR) for the route?",
-    "What is the next-hop IP address for this route?"
-  ]
-}
-
 IMPORTANT
 
 Return ONLY valid JSON.
@@ -382,3 +327,4 @@ def clarification_node(state: AgentState) -> AgentState:
 
 # print("\n--------Agent Finished -------\n")
 # print(result['structured_intent'])
+

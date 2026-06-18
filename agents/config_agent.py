@@ -4,13 +4,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound
 
 from agents.common import model
+from agents.jinja_filters import register_filters
 
-# ---------- Jinja2 setup ----------
 jinja_env = Environment(
     loader=FileSystemLoader("templates"),
     trim_blocks=True,
     lstrip_blocks=True
 )
+register_filters(jinja_env)
 
 TEMPLATE_MAP = {
     "create_vlan": "vlan.j2",
@@ -22,7 +23,6 @@ TEMPLATE_MAP = {
     "dns_configuration": "dns.j2",
     "mixed_intent": "mixed.j2",
 }
-
 CONFIG_VERIFY_PROMPT = """
 You are a Configuration Verification Agent for an Autonomous IBN system.
 
@@ -33,10 +33,16 @@ You will be given:
 
 YOUR TASK:
 - Check that the draft configuration correctly and completely implements the structured intent.
-- Check that nothing in the config contradicts or exceeds the user's original request.
-- Fix syntax errors, missing parameters, or inconsistencies (e.g. mismatched VLAN IDs, missing 'no shutdown', wrong ACL direction).
-- Do NOT add new features, policies, or objects that are not present in the structured intent.
-- Do NOT remove required elements that are present in the structured intent.
+- Fix ONLY clear syntax errors (e.g. a missing closing '!', a typo'd keyword).
+
+STRICT RULES — VIOLATING ANY OF THESE IS A FAILURE:
+- Do NOT add any line, interface, command, or keyword that is not already present in the draft_config.
+- Do NOT invent interface names (e.g. GigabitEthernet0/1) — none was specified in structured_intent.
+- Do NOT add 'ip access-group' bindings unless the draft_config already contains one.
+- Do NOT replace literal destination/source values (e.g. "internal_servers", "internet") with placeholder keywords like "any" or "log".
+- Do NOT add the 'log' keyword to any access-list line.
+- If the draft_config has no syntax errors, return it completely unchanged.
+- When in doubt, return the draft_config unchanged and set status to "verified".
 
 OUTPUT FORMAT (JSON only, no markdown, no explanations):
 
@@ -46,13 +52,8 @@ OUTPUT FORMAT (JSON only, no markdown, no explanations):
   "notes": "<short explanation of any changes made, or 'no changes needed'>"
 }
 
-- "verified": config matched intent exactly, no changes made.
-- "corrected": config had issues, you fixed them, return the fixed config.
-- "invalid": config cannot be reconciled with intent; explain in notes and return the original config unchanged.
-
 Your response must begin with { and end with }.
 """
-
 
 def config_agent(state: dict) -> dict:
     intent = state["structured_intent"]["intent"]

@@ -1,7 +1,6 @@
 ! Cisco IOS Configuration
 version 15.2
-hostname {{ deployment_target | default('NETWORK-DEVICE') | upper }}
-!
+
 {% for obj in network_objects %}
 {% if obj.type == "vlan" %}
 vlan {{ obj.id }}
@@ -9,12 +8,9 @@ vlan {{ obj.id }}
 !
 interface vlan {{ obj.id }}
  description {{ obj.name }} network
-{% if obj.gateway is defined and obj.subnet is defined %}
- ip address {{ obj.gateway }} {{ obj.subnet | netmask }}
-{% endif %}
 {% for action in actions %}
 {% if action == "enable_dhcp" %}
- ip helper-address {{ dhcp_server | default("0.0.0.0") }}
+ dhcp enabled
 {% endif %}
 {% endfor %}
  no shutdown

@@ -38,16 +38,6 @@ each entry in network_objects, each rule) against what actually
 appears in the rendered config — every intent object/field must be
 represented, and nothing extra must appear that intent didn't ask for.
 
-NOTE on the empty-network_objects check: a template referencing
-network_objects in a {% for obj in network_objects %} loop does NOT
-require that list to be non-empty — looping over an empty list is
-valid Jinja and renders nothing for that section, which is correct
-behavior for e.g. firewall_policy intents that only populate
-security_policies and never network_objects. We only flag a genuinely
-empty intent (nothing in network_objects, security_policies, or
-actions at all) since that means there is nothing for any template to
-render.
-
 Twin-box validator is the final pre-deploy gate. It calls the real
 Batfish service (via validation/batfish_validator.py) to actually
 parse and model the candidate config — this requires the Batfish
@@ -197,17 +187,13 @@ def semantic_check(template_name: str, structured_intent: dict, rendered_config:
     type_var_map = extract_loop_object_types(template_source)
 
     network_objects = structured_intent.get("network_objects", [])
-    security_policies = structured_intent.get("security_policies", [])
-    actions = structured_intent.get("actions", [])
-
-    # Only flag a genuinely empty intent — nothing at all to render.
-    # A template merely referencing network_objects in a {% for %}
-    # loop does NOT require that list to be non-empty; looping over
-    # an empty list is valid and correct (e.g. firewall_policy intents
-    # that only populate security_policies).
-    if not network_objects and not security_policies and not actions:
-        errors.append("structured_intent is empty — no network_objects, security_policies, or actions to render")
-        return False, errors
+    if not network_objects:
+        # Not every intent type necessarily uses network_objects;
+        # only enforce this if the template itself loops over it.
+        required_vars = get_template_required_vars(template_name)
+        if "network_objects" in required_vars:
+            errors.append("structured_intent has no network_objects but template requires it")
+            return False, errors
 
     for obj in network_objects:
         obj_type = obj.get("type")
@@ -221,20 +207,10 @@ def semantic_check(template_name: str, structured_intent: dict, rendered_config:
         if str(name_or_id) not in rendered_config and str(obj.get("id", "")) not in rendered_config:
             errors.append(f"object '{name_or_id}' (type={obj_type}) not found in rendered config")
 
-        # rules must each be represented. Account for the action-word
-        # translation templates apply (e.g. intent "allow" -> rendered
-        # "permit" in Cisco ACL syntax) so this check doesn't fail on
-        # a vendor-syntax mapping that's working as intended.
-        ACTION_SYNONYMS = {
-            "allow": ["allow", "permit"],
-            "deny": ["deny"],
-        }
+        # rules must each be represented
         for i, rule in enumerate(obj.get("rules", []), start=1):
             action = rule.get("action", "")
-            if not action:
-                continue
-            candidates = ACTION_SYNONYMS.get(action, [action])
-            if not any(c in rendered_config for c in candidates):
+            if action and action not in rendered_config:
                 errors.append(f"rule {i} action '{action}' for object '{name_or_id}' missing from rendered config")
 
     return (len(errors) == 0), errors
@@ -245,10 +221,9 @@ def semantic_check(template_name: str, structured_intent: dict, rendered_config:
 # ─────────────────────────────────────────────────────────────────
 # Maps your intent types to the device platform Batfish should assume
 # when parsing. All your templates currently render Cisco IOS style
-# CLI, so this defaults to "cisco" (this pybatfish version's valid
-# Cisco IOS platform string); update per-template if you add
+# CLI, so this defaults to cisco-ios; update per-template if you add
 # vendor-specific templates later.
-
+ 
 PLATFORM_MAP = {
     "create_vlan": "cisco",
     "network_segmentation": "cisco",
@@ -273,7 +248,7 @@ def run_on_twin_box(rendered_config: str, intent_type: str = "create_acl") -> tu
     if not rendered_config.strip():
         return False, "twin-box: empty config, nothing to send to Batfish"
 
-    platform = PLATFORM_MAP.get(intent_type, "cisco")
+    platform = PLATFORM_MAP.get(intent_type, "cisco-ios")
     ok, report = validate_with_batfish(rendered_config, platform=platform)
 
     if not ok:
