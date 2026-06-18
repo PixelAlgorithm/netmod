@@ -1,0 +1,30 @@
+{# mixed_intent: render whichever object types are present #}
+
+{% for obj in network_objects %}
+{% if obj.type == "vlan" %}
+vlan {{ obj.id }}
+ name {{ obj.name }}
+!
+interface vlan {{ obj.id }}
+ description {{ obj.name }} network
+{% if "enable_dhcp" in actions %}
+ dhcp enabled
+{% endif %}
+ no shutdown
+!
+{% elif obj.type == "route" %}
+route {{ obj.destination }} {{ obj.subnet_mask | default("255.255.255.0") }} {{ obj.next_hop | default("0.0.0.0") }}
+{% elif obj.type == "dns_record" %}
+dns-record {{ obj.name }} {{ obj.record_type | default("A") }} {{ obj.value }}
+{% elif obj.type == "subnet" %}
+dhcp-pool {{ obj.name | default("POOL_" + obj.id|string) }}
+ network {{ obj.subnet | default("0.0.0.0/24") }}
+!
+{% endif %}
+{% endfor %}
+
+{% for constraint in constraints %}
+constraint: {{ constraint }}
+{% endfor %}
+
+{# security_policies intentionally skipped — pending subnet/object resolution #}

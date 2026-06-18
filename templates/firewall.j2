@@ -1,0 +1,17 @@
+{% for obj in network_objects %}
+{% if obj.type == "zone" %}
+zone {{ obj.name }}
+{% if obj.interfaces is defined %}
+{% for intf in obj.interfaces %}
+ interface {{ intf }}
+{% endfor %}
+{% endif %}
+!
+{% endif %}
+{% endfor %}
+
+{# security_policies (allow/deny rules) intentionally skipped — pending object/subnet resolution #}
+
+{% for constraint in constraints %}
+constraint: {{ constraint }}
+{% endfor %}

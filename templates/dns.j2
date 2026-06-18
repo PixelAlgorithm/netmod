@@ -1,0 +1,11 @@
+{% for obj in network_objects %}
+{% if obj.type == "dns_record" %}
+dns-record {{ obj.name }} {{ obj.record_type | default("A") }} {{ obj.value }}
+{% elif obj.type == "dns_server" %}
+dns-server {{ obj.address }}
+{% if obj.zone is defined %}
+ zone {{ obj.zone }}
+{% endif %}
+!
+{% endif %}
+{% endfor %}

@@ -1,0 +1,11 @@
+{% for obj in network_objects %}
+{% if obj.type == "acl" %}
+acl {{ obj.name | default("ACL_" + obj.id|string) }}
+{% for rule in obj.rules | default([]) %}
+ rule {{ loop.index }} {{ rule.action }} {{ rule.protocol | default("ip") }} {{ rule.source | default("any") }} {{ rule.destination | default("any") }}
+{% endfor %}
+!
+{% endif %}
+{% endfor %}
+
+{# security_policies intentionally skipped — pending subnet/object resolution #}

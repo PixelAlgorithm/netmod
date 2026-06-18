@@ -1,0 +1,24 @@
+{% for obj in network_objects %}
+{% if obj.type == "vlan" %}
+vlan {{ obj.id }}
+ name {{ obj.name }}
+!
+interface vlan {{ obj.id }}
+ description {{ obj.name }} network
+{% for action in actions %}
+{% if action == "enable_dhcp" %}
+ ip helper-address {{ dhcp_server | default("0.0.0.0") }}
+{% endif %}
+{% endfor %}
+ no shutdown
+!
+{% endif %}
+{% endfor %}
+
+{% for policy in security_policies %}
+{% if policy.action == "deny" %}
+access-list 100 deny ip any {{ policy.destination }}
+{% elif policy.action == "allow" %}
+access-list 100 permit ip any {{ policy.destination }}
+{% endif %}
+{% endfor %}

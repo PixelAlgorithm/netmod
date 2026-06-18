@@ -1,14 +1,9 @@
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-from jinja2 import Environment, FileSystemLoader, TemplateNotFound
 import json
 
-# Same model config as intent_agent.py
-model = ChatOpenAI(
-    model="qwen/qwen3-8b",
-    base_url="http://127.0.0.1:1234/v1",
-    api_key="sk-lm-EJjPzE1o:6W4624mlXHx6NbrnC10r"
-)
+from langchain_core.messages import HumanMessage, SystemMessage
+from jinja2 import Environment, FileSystemLoader, TemplateNotFound
+
+from agents.common import model
 
 # ---------- Jinja2 setup ----------
 jinja_env = Environment(

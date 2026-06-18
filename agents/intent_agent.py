@@ -1,5 +1,9 @@
-from common import AgentState, model
 import json
+
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langgraph.graph import END, StateGraph
+
+from agents.common import AgentState, model
 
 prompt =""" 
 You are an Intent Analysis Agent for an Autonomous Intent-Based Networking (IBN) system.
@@ -185,29 +189,29 @@ def clarification_node(state: AgentState) -> AgentState:
     
     return state
 
-graph = StateGraph(AgentState)
-graph.add_node("IntentAgent",intent_agent)
-graph.add_node("Clarification",clarification_node)
-graph.add_node("ready", lambda state: state)  
+# graph = StateGraph(AgentState)
+# graph.add_node("IntentAgent",intent_agent)
+# graph.add_node("Clarification",clarification_node)
+# graph.add_node("ready", lambda state: state)  
 
-graph.set_entry_point("IntentAgent")
+# graph.set_entry_point("IntentAgent")
 
-graph.add_conditional_edges("IntentAgent", route_intent, {
-    "clarification": "Clarification",
-    "ready": "ready"
-})
+# graph.add_conditional_edges("IntentAgent", route_intent, {
+#     "clarification": "Clarification",
+#     "ready": "ready"
+# })
 
-graph.add_edge("Clarification", "IntentAgent")  # loop back after answers
-graph.add_edge("ready", END)
+# graph.add_edge("Clarification", "IntentAgent")  # loop back after answers
+# graph.add_edge("ready", END)
 
-app = graph.compile()
+# app = graph.compile()
 
-result=app.invoke(
-{
-    'messages': [HumanMessage(content=input("what u like to create : "))]
-}
-)    
+# result=app.invoke(
+# {
+#     'messages': [HumanMessage(content=input("what u like to create : "))]
+# }
+# )    
 
-print("\n--------Agent Finished -------\n")
-print(result['structured_intent'])
+# print("\n--------Agent Finished -------\n")
+# print(result['structured_intent'])
 

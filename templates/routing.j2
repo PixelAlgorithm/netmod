@@ -1,0 +1,17 @@
+{% for obj in network_objects %}
+{% if obj.type == "route" %}
+route {{ obj.destination }} {{ obj.subnet_mask | default("255.255.255.0") }} {{ obj.next_hop | default("0.0.0.0") }}
+{% elif obj.type == "routing_protocol" %}
+router {{ obj.protocol }}
+{% for net in obj.networks | default([]) %}
+ network {{ net }}
+{% endfor %}
+!
+{% endif %}
+{% endfor %}
+
+{% for action in actions %}
+{% if action == "enable_routing" %}
+ip routing enabled
+{% endif %}
+{% endfor %}

@@ -1,0 +1,18 @@
+{% for obj in network_objects %}
+{% if obj.type == "vlan" or obj.type == "subnet" %}
+dhcp-pool {{ obj.name | default("POOL_" + obj.id|string) }}
+ network {{ obj.subnet | default("0.0.0.0/24") }}
+{% if obj.gateway is defined %}
+ default-gateway {{ obj.gateway }}
+{% endif %}
+{% if obj.dns_servers is defined %}
+{% for dns in obj.dns_servers %}
+ dns-server {{ dns }}
+{% endfor %}
+{% endif %}
+{% if obj.lease_time is defined %}
+ lease {{ obj.lease_time }}
+{% endif %}
+!
+{% endif %}
+{% endfor %}
