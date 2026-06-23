@@ -168,7 +168,11 @@ def syntax_check(template_name: str, rendered_config: str) -> tuple[bool, list[s
     if uses_bang_closer:
         opens = sum(1 for l in lines if l.strip() and not l.strip().startswith("!") and not l.startswith(" "))
         closers = sum(1 for l in lines if l.strip() == "!")
-        if closers == 0 and opens > 0:
+        # Only flag if the config uses numbered ACL or block styles that
+        # actually need '!' closers. Named extended ACLs (ip access-list
+        # extended ...) are closed implicitly by dedentation — no '!' needed.
+        has_named_acl = any("ip access-list" in l for l in lines)
+        if closers == 0 and opens > 0 and not has_named_acl:
             errors.append("template uses '!' block closers but rendered config has none")
 
     # Check for obviously broken Jinja leftovers (unrendered {{ }} or {% %})

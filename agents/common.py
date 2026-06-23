@@ -11,6 +11,7 @@ class AgentState(TypedDict):
     validation_result: str
     retry_count: int
     failure_context: str
+    repair_attempts: int  
  
 
 model = ChatBedrock(
