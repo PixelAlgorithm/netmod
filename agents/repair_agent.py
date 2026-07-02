@@ -26,9 +26,7 @@ giving up and letting the escalation path take over.
 
 import json
 from langchain_core.messages import HumanMessage, SystemMessage
-from agents.common import invoke_model
-
-MAX_REPAIR_ATTEMPTS = 2
+from agents.common import MAX_TOTAL_ATTEMPTS, invoke_model
 
 REPAIR_PROMPT = """
 You are a Network Configuration Repair Agent for an Autonomous IBN system.
@@ -63,6 +61,18 @@ COMMON FIXES:
 - "access-list X permit ip any internet" → replace "internet" with "any"
 - "access-list X deny ip any internal_servers" → replace label with actual CIDR from intent
 
+DEVICE REJECTION FIXES (when failure_context contains "device rejected lines"):
+- "% Invalid input detected" on a vlan line → device may be a router not a switch;
+  try removing vlan database commands or use 'vlan <id>' under interface config
+- "% Invalid input detected" on an interface vlan line → L3 interfaces may not be
+  supported; check if 'ip routing' is enabled
+- "% Invalid input detected" on a 'version X.X' line → remove the version line,
+  it is informational only and not a valid config command on all platforms
+- "% Invalid input detected" on 'hostname' line → should never happen; if it does,
+  remove the hostname line and try without it
+- General rule: if a whole section (vlan block, interface block) is rejected,
+  remove that section entirely and return the minimal working subset
+
 OUTPUT FORMAT (JSON only, no markdown, no explanations):
 
 {
@@ -85,21 +95,24 @@ def repair_agent(state: dict) -> dict:
     retry_count. Does NOT reset validation_result — ValidationAgent
     will overwrite it on the next pass.
     """
+    total_attempts = state.get("total_attempts", 0)
     repair_attempts = state.get("repair_attempts", 0)
 
-    if repair_attempts >= MAX_REPAIR_ATTEMPTS:
-        print(f"  [repair_agent] max repair attempts ({MAX_REPAIR_ATTEMPTS}) reached, passing to escalation")
-        # Force escalation by making validation_result look escalated
+    if total_attempts >= MAX_TOTAL_ATTEMPTS:
+        print(f"  [repair_agent] max total attempts ({MAX_TOTAL_ATTEMPTS}) reached, passing to escalation")
         state["validation_result"] = (
             f"invalid (escalated after repairs): {state.get('failure_context', 'unknown')}"
         )
         return state
 
+    total_attempts += 1
+    state["total_attempts"] = total_attempts
+
     failure_context = state.get("failure_context", "")
     broken_config = state.get("config", "")
     intent = state["structured_intent"].get("intent", {})
 
-    print(f"  [repair_agent] attempt {repair_attempts + 1}/{MAX_REPAIR_ATTEMPTS}")
+    print(f"  [repair_agent] attempt {total_attempts}/{MAX_TOTAL_ATTEMPTS}")
     print(f"  [repair_agent] fixing: {failure_context[:120]}{'...' if len(failure_context) > 120 else ''}")
 
     messages = [
@@ -134,9 +147,6 @@ def repair_agent(state: dict) -> dict:
         print(f"  [repair_agent] no fix applied: {result.get('notes', '')}")
 
     state["repair_attempts"] = repair_attempts + 1
-    # Reset retry_count so ValidationAgent gives this repaired config
-    # a fresh set of attempts rather than immediately escalating.
-    state["retry_count"] = 0
     return state
 
 

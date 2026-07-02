@@ -1,37 +1,8 @@
-import json
-import os
 import re
 from copy import deepcopy
-from datetime import datetime, timezone
 
-from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
-
-from device_client import open_device_connection
-from settings import MissingEnvironmentError, get_device_settings, get_memory_settings
-
-MEMORY_COMMANDS = {
-    "hostname": "show running-config | include ^hostname",
-    "vlans": "show vlan brief",
-    "interfaces": "show ip interface brief",
-    "acls": "show ip access-lists",
-    "routes": "show ip route",
-    "topology": "show cdp neighbors detail",
-    "running_config": "show running-config",
-}
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _empty_memory() -> dict:
-    return {
-        "schema_version": "1.0",
-        "last_updated": None,
-        "last_refresh_status": "never_refreshed",
-        "devices": [],
-        "deployment_history": [],
-    }
+from memory.network_store import build_memory_summary, get_latest_snapshot, init_db
+from settings import MissingEnvironmentError, get_device_settings
 
 
 def _parse_hostname(output: str) -> str:
@@ -224,29 +195,25 @@ def _summarize_memory(memory: dict) -> str:
 
 
 class NetworkMemory:
-    def __init__(self, path: str | None = None):
-        memory_settings = get_memory_settings()
-        self.path = path or memory_settings.path
-        self.enable_topology = memory_settings.enable_topology
+    def __init__(self, device_host: str | None = None):
+        init_db()
+        self.device_host = device_host
         self.data = self.load()
 
     def load(self) -> dict:
-        if not os.path.exists(self.path):
-            return _empty_memory()
-        with open(self.path, "r", encoding="utf-8") as file_obj:
-            return json.load(file_obj)
-
-    def save(self) -> None:
-        directory = os.path.dirname(self.path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        with open(self.path, "w", encoding="utf-8") as file_obj:
-            json.dump(self.data, file_obj, indent=2)
+        if not self.device_host:
+            return {"devices": []}
+        latest = get_latest_snapshot(self.device_host)
+        if not latest:
+            return {"devices": []}
+        return {"devices": [latest]}
 
     def snapshot(self) -> dict:
         return deepcopy(self.data)
 
     def summary(self) -> str:
+        if self.device_host:
+            return build_memory_summary(self.device_host)
         return _summarize_memory(self.data)
 
     def get_devices(self) -> list[dict]:
@@ -277,90 +244,32 @@ class NetworkMemory:
                     return acl
         return None
 
-    def add_deployment_record(self, state: dict, status: str) -> None:
-        intent = state.get("structured_intent", {}).get("intent", {})
-        record = {
-            "timestamp": _utc_now(),
-            "status": status,
-            "intent_type": intent.get("intent_type"),
-            "description": intent.get("description"),
-            "deployment_result": state.get("deployment_result"),
-        }
-        self.data.setdefault("deployment_history", []).append(record)
-
-    def refresh_from_device(self, deployment_record: dict | None = None) -> dict:
-        device_settings = get_device_settings()
-
-        outputs = {}
-        try:
-            connection = open_device_connection(
-                device_settings,
-                timeout=20,
-                session_timeout=20,
-                conn_timeout=10,
-                banner_timeout=10,
-                auth_timeout=10,
-                read_timeout_override=20,
-                global_delay_factor=1,
-            )
-            for key, command in MEMORY_COMMANDS.items():
-                if key == "topology" and not self.enable_topology:
-                    continue
-                outputs[key] = connection.send_command(command, read_timeout=30)
-            connection.disconnect()
-        except (MissingEnvironmentError, NetmikoTimeoutException, NetmikoAuthenticationException, OSError, Exception) as exc:
-            self.data["last_updated"] = _utc_now()
-            self.data["last_refresh_status"] = f"refresh_failed: {exc}"
-            if deployment_record:
-                self.data.setdefault("deployment_history", []).append(deployment_record)
-            self.save()
-            return self.snapshot()
-
-        device_state = {
-            "host": device_settings.host,
-            "hostname": _parse_hostname(outputs.get("hostname", "")),
-            "vlans": _parse_vlans(outputs.get("vlans", "")),
-            "interfaces": _parse_interfaces(outputs.get("interfaces", "")),
-            "acls": _parse_acls(outputs.get("acls", "")),
-            "routes": _parse_routes(outputs.get("routes", "")),
-            "topology": {
-                "links": _parse_topology(outputs.get("topology", "")) if self.enable_topology else []
-            },
-            "raw_outputs": outputs,
-        }
-
-        self.data["devices"] = [device_state]
-        self.data["last_updated"] = _utc_now()
-        self.data["last_refresh_status"] = "refreshed_from_device"
-        if deployment_record:
-            self.data.setdefault("deployment_history", []).append(deployment_record)
-        self.save()
-        return self.snapshot()
-
 
 def load_network_memory_node(state: dict) -> dict:
-    memory_manager = NetworkMemory()
+    if state.get("network_memory") and state.get("network_memory_summary"):
+        return state
+
+    try:
+        device_settings = get_device_settings()
+    except MissingEnvironmentError:
+        state["network_memory"] = state.get("network_memory", {})
+        state["network_memory_summary"] = state.get("network_memory_summary", "")
+        return state
+
+    memory_manager = NetworkMemory(device_settings.host)
     state["network_memory"] = memory_manager.snapshot()
     state["network_memory_summary"] = memory_manager.summary()
-
-    if get_memory_settings().auto_refresh:
-        refreshed_memory = memory_manager.refresh_from_device()
-        state["network_memory"] = refreshed_memory
-        state["network_memory_summary"] = memory_manager.summary()
 
     return state
 
 
 def update_network_memory_node(state: dict) -> dict:
-    memory_manager = NetworkMemory()
-    deployment_record = {
-        "timestamp": _utc_now(),
-        "status": "deployed",
-        "intent_type": state.get("structured_intent", {}).get("intent", {}).get("intent_type"),
-        "description": state.get("structured_intent", {}).get("intent", {}).get("description"),
-        "deployment_result": state.get("deployment_result"),
-    }
-    refreshed_memory = memory_manager.refresh_from_device(deployment_record=deployment_record)
-    state["network_memory"] = refreshed_memory
+    try:
+        device_settings = get_device_settings()
+    except MissingEnvironmentError:
+        return state
+
+    memory_manager = NetworkMemory(device_settings.host)
+    state["network_memory"] = memory_manager.snapshot()
     state["network_memory_summary"] = memory_manager.summary()
     return state

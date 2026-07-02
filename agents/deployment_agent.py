@@ -3,9 +3,20 @@ agents/deployment_agent.py
 Deployment Agent — Cisco DevNet Catalyst 8000 Always-On Sandbox via Netmiko SSH.
 """
 
+import json
+import uuid
+
 from netmiko.exceptions import NetmikoTimeoutException, NetmikoAuthenticationException
 
+from agents.common import MAX_TOTAL_ATTEMPTS
 from device_client import open_device_connection
+from memory.network_memory import _parse_acls, _parse_hostname, _parse_interfaces, _parse_routes, _parse_vlans
+from memory.network_store import (
+    build_memory_summary,
+    get_latest_snapshot,
+    save_deployed_intent,
+    save_device_snapshot,
+)
 from settings import MissingEnvironmentError, get_device_settings
 
 VERIFY_COMMANDS = {
@@ -18,6 +29,23 @@ VERIFY_COMMANDS = {
     "dns_configuration":    ["show hosts"],
     "mixed_intent":         ["show running-config"],
 }
+
+SNAPSHOT_COMMANDS = {
+    "hostname": "show running-config | include ^hostname",
+    "vlans": "show vlan brief",
+    "interfaces": "show ip interface brief",
+    "acls": "show ip access-lists",
+    "routes": "show ip route",
+    "running_config": "show running-config",
+}
+
+CISCO_ERROR_PATTERNS = [
+    "% Invalid input detected",
+    "% Ambiguous command",
+    "% Incomplete command",
+    "% Unknown command",
+    "Error:",
+]
 
 
 def _clean_config_lines(config: str) -> list:
@@ -33,15 +61,21 @@ def _clean_config_lines(config: str) -> list:
     return lines
 
 
+def _contains_device_rejection(push_output: str) -> bool:
+    return any(pattern in push_output for pattern in CISCO_ERROR_PATTERNS)
+
+
 def deployment_agent(state: dict) -> dict:
     config      = state.get("config", "")
     intent      = state.get("structured_intent", {}).get("intent", {})
     intent_type = intent.get("intent_type", "unknown")
+    connection = None
 
     try:
         device_settings = get_device_settings()
     except MissingEnvironmentError as exc:
         state["deployment_result"] = f"deploy_failed: {exc}"
+        state["total_attempts"] = MAX_TOTAL_ATTEMPTS
         return state
 
     print(f"\n  [deployment_agent] connecting to {device_settings.host}:{device_settings.port}")
@@ -49,6 +83,7 @@ def deployment_agent(state: dict) -> dict:
 
     if not config.strip():
         state["deployment_result"] = "deploy_failed: config is empty"
+        state["total_attempts"] = MAX_TOTAL_ATTEMPTS
         return state
 
     try:
@@ -69,25 +104,73 @@ def deployment_agent(state: dict) -> dict:
         )
         print(f"  [deployment_agent] push output:\n{push_output}")
 
+        if _contains_device_rejection(push_output):
+            state["deployment_result"] = f"deploy_failed: device rejected lines\n{push_output}"
+            state["failure_context"] = f"Device rejected these config lines:\n{push_output}"
+            state["total_attempts"] = state.get("total_attempts", 0) + 1
+            return state
+
         # ── Save config ───────────────────────────────────────────
         save_output = connection.save_config()
         print(f"  [deployment_agent] saved: {save_output.strip()[:80]}")
 
         # ── Post-deploy verification ──────────────────────────────
-        commands = VERIFY_COMMANDS.get(intent_type, ["show running-config"])
-        verify_outputs = []
-        for cmd in commands:
+        command_order = VERIFY_COMMANDS.get(intent_type, ["show running-config"])
+        verify_outputs = {}
+        for cmd in command_order:
             result = connection.send_command(cmd, read_timeout=30)
-            verify_outputs.append(f"--- {cmd} ---\n{result}")
+            verify_outputs[cmd] = result
             print(f"\n  {cmd}:\n{result}")
 
-        connection.disconnect()
+        for key, cmd in SNAPSHOT_COMMANDS.items():
+            if cmd in verify_outputs:
+                continue
+            result = connection.send_command(cmd, read_timeout=30)
+            verify_outputs[cmd] = result
+            print(f"\n  {cmd}:\n{result}")
+
+        current_hostname = _parse_hostname(
+            verify_outputs.get(SNAPSHOT_COMMANDS["hostname"], "") or
+            verify_outputs.get(SNAPSHOT_COMMANDS["running_config"], "")
+        )
+        parsed_vlans = _parse_vlans(verify_outputs.get(SNAPSHOT_COMMANDS["vlans"], ""))
+        parsed_interfaces = _parse_interfaces(verify_outputs.get(SNAPSHOT_COMMANDS["interfaces"], ""))
+        parsed_acls = _parse_acls(verify_outputs.get(SNAPSHOT_COMMANDS["acls"], ""))
+        parsed_routes = _parse_routes(verify_outputs.get(SNAPSHOT_COMMANDS["routes"], ""))
+        running_config_text = verify_outputs.get(SNAPSHOT_COMMANDS["running_config"], "")
 
         state["deployment_result"] = (
             f"deployed: config pushed to '{device_settings.host}' successfully | "
             f"post-deploy verification: PASSED\n" +
-            "\n".join(verify_outputs)
+            "\n".join(f"--- {cmd} ---\n{output}" for cmd, output in verify_outputs.items())
         )
+        state["failure_context"] = ""
+        state["total_attempts"] = 0
+
+        save_deployed_intent(
+            intent_id=str(uuid.uuid4()),
+            intent_type=intent_type,
+            deployment_target=intent.get("deployment_target", ""),
+            config=config,
+            structured_intent=json.dumps(intent),
+            status="deployed",
+            device_host=device_settings.host,
+            deployment_result=state["deployment_result"],
+        )
+
+        save_device_snapshot(
+            device_host=device_settings.host,
+            hostname=current_hostname,
+            vlans=json.dumps(parsed_vlans),
+            interfaces=json.dumps(parsed_interfaces),
+            acls=json.dumps(parsed_acls),
+            routes=json.dumps(parsed_routes),
+            raw_running_config=running_config_text,
+        )
+
+        latest_snapshot = get_latest_snapshot(device_settings.host)
+        state["network_memory"] = {"devices": [latest_snapshot]} if latest_snapshot else {}
+        state["network_memory_summary"] = build_memory_summary(device_settings.host)
 
     except NetmikoTimeoutException as e:
         msg = (
@@ -96,6 +179,8 @@ def deployment_agent(state: dict) -> dict:
         )
         print(f"  [deployment_agent] {msg}")
         state["deployment_result"] = msg
+        state["failure_context"] = msg
+        state["total_attempts"] = MAX_TOTAL_ATTEMPTS
 
     except NetmikoAuthenticationException as e:
         msg = (
@@ -104,17 +189,31 @@ def deployment_agent(state: dict) -> dict:
         )
         print(f"  [deployment_agent] {msg}")
         state["deployment_result"] = msg
+        state["failure_context"] = msg
+        state["total_attempts"] = MAX_TOTAL_ATTEMPTS
 
     except Exception as e:
         msg = f"deploy_failed: unexpected error — {e}"
         print(f"  [deployment_agent] {msg}")
         state["deployment_result"] = msg
+        state["failure_context"] = msg
+        state["total_attempts"] = MAX_TOTAL_ATTEMPTS
+
+    finally:
+        if connection is not None:
+            try:
+                connection.disconnect()
+            except Exception:
+                pass
 
     return state
 
 
 def route_after_deployment(state: dict) -> str:
     result = state.get("deployment_result", "")
+    total_attempts = state.get("total_attempts", 0)
     if result.startswith("deployed:"):
         return "done"
+    if result.startswith("deploy_failed:") and total_attempts < MAX_TOTAL_ATTEMPTS:
+        return "repair_and_retry"
     return "human_review"

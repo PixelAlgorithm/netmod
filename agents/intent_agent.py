@@ -1,7 +1,7 @@
 import json
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langgraph.graph import END, StateGraph
+from langgraph.types import interrupt
 
 from agents.common import AgentState, invoke_model
 prompt = """ 
@@ -359,29 +359,50 @@ def intent_agent(state : AgentState)-> AgentState:
     
 
 def route_intent(state):
+    status = state["structured_intent"]["status"]
 
-    if state["structured_intent"]["status"] == "needs_clarification":
-
+    if status == "needs_clarification":
         return "clarification"
+
+    if status == "clarification_complete":
+        return "ready"
 
     return "ready"
 
 def clarification_node(state: AgentState) -> AgentState:
-    questions = state["structured_intent"]["questions"]
+    questions = state["structured_intent"].get("questions", [])
+    current_question_index = state.get("current_question_index", 0)
     print("\n[Agent needs clarification]")
     if state.get("network_memory_summary"):
         print("\n[Current network memory]")
         print(state["network_memory_summary"])
-    
-    for i, q in enumerate(questions, 1):
-        print(f"\n  {i}. {q}")
-        answer = input("Your answer: ")
-        # each Q&A pair added as AIMessage → HumanMessage
-        state["messages"] = state["messages"] + [
-            AIMessage(content=q),
-            HumanMessage(content=answer)
-        ]
-    
+
+    if not questions:
+        state["current_question_index"] = 0
+        state["structured_intent"]["status"] = "clarification_complete"
+        return state
+
+    question = questions[current_question_index]
+    print(f"\n  {current_question_index + 1}. {question}")
+    answer = interrupt({
+        "question": question,
+        "question_number": current_question_index + 1,
+        "total_questions": len(questions),
+    })
+
+    state["messages"] = state["messages"] + [
+        AIMessage(content=question),
+        HumanMessage(content=answer)
+    ]
+
+    current_question_index += 1
+    if current_question_index < len(questions):
+        state["current_question_index"] = current_question_index
+        state["structured_intent"]["status"] = "needs_clarification"
+    else:
+        state["current_question_index"] = 0
+        state["structured_intent"]["status"] = "clarification_complete"
+
     return state
 
 # graph = StateGraph(AgentState)

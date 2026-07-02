@@ -6,6 +6,8 @@ from langchain_openai import ChatOpenAI
 
 from settings import get_llm_settings
 
+MAX_TOTAL_ATTEMPTS = 5
+
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -18,13 +20,15 @@ class AgentState(TypedDict):
     deployment_result: str      # written by DeploymentAgent
     network_memory: dict
     network_memory_summary: str
+    current_question_index: int
+    total_attempts: int
 
 
 llm_settings = get_llm_settings()
 
 if llm_settings.provider == "bedrock":
     model = ChatBedrock(
-        model='amazon.nova-pro-v1:0',
+        model=llm_settings.model_id,
         region_name=llm_settings.aws_region,
     )
 else:

@@ -1,5 +1,6 @@
 # Core LangChain / LangGraph — let pip resolve compatible versions
 langgraph
+langgraph-checkpoint-sqlite
 langchain-aws
 langchain-core
 langchain-openai

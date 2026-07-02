@@ -59,9 +59,9 @@ rather than silently passing.
 import os
 import re
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound, meta
+from agents.common import MAX_TOTAL_ATTEMPTS
 from validation.batfish_validator import validate_with_batfish
 
-MAX_RETRIES = 3
 TEMPLATES_DIR = "templates"
 from agents.jinja_filters import register_filters
 
@@ -292,7 +292,7 @@ def validation_agent(state: dict) -> dict:
     intent = state["structured_intent"]["intent"]
     intent_type = intent.get("intent_type")
     rendered_config = state.get("config", "")
-    retry_count = state.get("retry_count", 0)
+    total_attempts = state.get("total_attempts", 0)
 
     template_name = TEMPLATE_MAP.get(intent_type, "mixed.j2")
 
@@ -321,27 +321,35 @@ def validation_agent(state: dict) -> dict:
         if semantic_errors:
             reasons.append("Semantic: " + "; ".join(semantic_errors))
 
-        retry_count += 1
-        state["retry_count"] = retry_count
+        total_attempts += 1
+        state["total_attempts"] = total_attempts
         state["failure_context"] = " | ".join(reasons)
 
-        if retry_count >= MAX_RETRIES:
-            state["validation_result"] = f"invalid (escalated after {retry_count} retries): {state['failure_context']}"
+        if total_attempts >= MAX_TOTAL_ATTEMPTS:
+            state["validation_result"] = (
+                f"invalid (escalated after {total_attempts} total attempts): {state['failure_context']}"
+            )
         else:
-            state["validation_result"] = f"invalid (retry {retry_count}/{MAX_RETRIES}): {state['failure_context']}"
+            state["validation_result"] = (
+                f"invalid (attempt {total_attempts}/{MAX_TOTAL_ATTEMPTS}): {state['failure_context']}"
+            )
         return state
 
     # ---- twin-box pre-deploy gate (only runs if static checks pass) ----
     twin_ok, twin_reason = run_on_twin_box(rendered_config, intent_type=intent_type)
 
     if not twin_ok:
-        retry_count += 1
-        state["retry_count"] = retry_count
+        total_attempts += 1
+        state["total_attempts"] = total_attempts
         state["failure_context"] = twin_reason
-        if retry_count >= MAX_RETRIES:
-            state["validation_result"] = f"invalid (escalated after {retry_count} retries): {twin_reason}"
+        if total_attempts >= MAX_TOTAL_ATTEMPTS:
+            state["validation_result"] = (
+                f"invalid (escalated after {total_attempts} total attempts): {twin_reason}"
+            )
         else:
-            state["validation_result"] = f"invalid (retry {retry_count}/{MAX_RETRIES}): {twin_reason}"
+            state["validation_result"] = (
+                f"invalid (attempt {total_attempts}/{MAX_TOTAL_ATTEMPTS}): {twin_reason}"
+            )
         return state
 
     state["validation_result"] = "verified_by_validation_agent"
