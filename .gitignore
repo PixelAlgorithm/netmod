@@ -1,0 +1,26 @@
+# Secret credentials — NEVER push this
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Batfish snapshots (auto-generated)
+batfish_snapshots/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,26 @@
+# Core LangChain / LangGraph — let pip resolve compatible versions
+langgraph
+langchain-aws
+langchain-core
+langchain-openai
+langsmith
+python-dotenv
+
+# AWS Bedrock
+boto3
+botocore
+
+# Jinja2 templating
+Jinja2>=3.1.6
+
+# Batfish static analysis
+pybatfish==2025.7.7.2423
+
+# Netmiko — SSH to Catalyst 8000 sandbox
+netmiko>=4.3.0
+
+# HTTP / utilities
+requests>=2.34.0
+pydantic>=2.0.0
+PyYAML>=6.0.3
+typing_extensions>=4.0.0

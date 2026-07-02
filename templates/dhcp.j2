@@ -1,0 +1,26 @@
+! Cisco IOS Configuration
+version 15.2
+hostname {{ device_hostname | default("DHCP-SERVER") }}
+!
+{% for obj in network_objects %}
+{% if obj.type == "vlan" %}
+ip dhcp pool {{ obj.name | default("POOL_" + obj.id|string) }}
+{% if obj.subnet is defined %}
+ network {{ obj.subnet | network_addr }} {{ obj.subnet | netmask }}
+{% endif %}
+{% if obj.gateway is defined %}
+ default-router {{ obj.gateway }}
+{% endif %}
+{% if obj.dns_servers is defined %}
+{% for dns in obj.dns_servers %}
+ dns-server {{ dns }}
+{% endfor %}
+{% endif %}
+{% if obj.lease_time is defined %}
+ lease {{ obj.lease_time }}
+{% endif %}
+!
+{% endif %}
+{% endfor %}
+
+end

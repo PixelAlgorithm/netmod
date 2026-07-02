@@ -1,0 +1,20 @@
+! Cisco IOS Configuration
+version 15.2
+hostname {{ device_hostname | default("VALIDATION-NODE") }}
+!
+{% for obj in network_objects %}
+{% if obj.type == "acl" %}
+ip access-list extended {{ obj.name | default("ACL_" + obj.id|string) }}
+{% for rule in obj.rules | default([]) %}
+{% if rule.action == "allow" %}
+{% set acl_action = "permit" %}
+{% else %}
+{% set acl_action = rule.action %}
+{% endif %}
+ {{ acl_action }} {{ rule.protocol | default("ip") }} {% if rule.source and rule.source != "any" %}{{ rule.source }} {{ rule.source_wildcard | default("0.0.0.255") }}{% else %}any{% endif %} {% if rule.destination and rule.destination != "any" %}{{ rule.destination }} {{ rule.destination_wildcard | default("0.0.0.255") }}{% else %}any{% endif %}
+{% endfor %}
+!
+{% endif %}
+{% endfor %}
+{# security_policies intentionally skipped — pending subnet/object resolution #}
+end

@@ -1,0 +1,26 @@
+! Cisco IOS Configuration
+version 15.2
+hostname {{ deployment_target | default('DNS-SERVER') | upper }}
+!
+{% for obj in network_objects %}
+{% if obj.type == "vlan" %}
+! DNS forwarding for {{ obj.name }}
+{% if obj.dns_servers is defined %}
+{% for dns in obj.dns_servers %}
+ip name-server {{ dns }}
+{% endfor %}
+{% endif %}
+{% if obj.domain_name is defined %}
+ip domain name {{ obj.domain_name }}
+{% endif %}
+!
+{% elif obj.type == "dns_record" %}
+dns-record {{ obj.name }} {{ obj.record_type | default("A") }} {{ obj.value }}
+!
+{% elif obj.type == "dns_server" %}
+ip name-server {{ obj.address }}
+!
+{% endif %}
+{% endfor %}
+
+end
