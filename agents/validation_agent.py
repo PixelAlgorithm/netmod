@@ -81,6 +81,7 @@ TEMPLATE_MAP = {
     "dhcp_configuration": "dhcp.j2",
     "dns_configuration": "dns.j2",
     "mixed_intent": "mixed.j2",
+    "query_state": None,
 }
 
 
@@ -293,6 +294,10 @@ def validation_agent(state: dict) -> dict:
     intent_type = intent.get("intent_type")
     rendered_config = state.get("config", "")
     total_attempts = state.get("total_attempts", 0)
+
+    if intent_type == "query_state":
+        state["validation_result"] = "skipped: query_state is read-only"
+        return state
 
     template_name = TEMPLATE_MAP.get(intent_type, "mixed.j2")
 

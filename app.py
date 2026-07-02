@@ -33,6 +33,22 @@ def human_review_node(state: dict) -> dict:
     return state
 
 
+def query_node(state: dict) -> dict:
+    """
+    Read-only node — displays current network state from memory.
+    Does NOT push any config to the device.
+    """
+    print("\n[Query — read-only, no config changes]")
+    summary = state.get("network_memory_summary", "")
+    if summary:
+        print("\n-------- Current Network State --------\n")
+        print(summary)
+    else:
+        print("\n[No network memory available yet — run a deployment first]")
+    state["deployment_result"] = "query_complete: read-only state displayed"
+    return state
+
+
 def build_graph() -> StateGraph:
     graph = StateGraph(AgentState)
 
@@ -43,6 +59,7 @@ def build_graph() -> StateGraph:
     graph.add_node("ValidationAgent", validation_agent)
     graph.add_node("RepairAgent",    repair_agent)
     graph.add_node("HumanReview",    human_review_node)
+    graph.add_node("QueryNode",      query_node)
     graph.add_node("DeploymentAgent", deployment_agent)
     graph.add_node("NetworkMemoryUpdate", update_network_memory_node)
 
@@ -51,10 +68,12 @@ def build_graph() -> StateGraph:
 
     graph.add_conditional_edges("IntentAgent", route_intent, {
         "clarification": "Clarification",
+        "query":         "QueryNode",
         "ready":         "ConfigAgent"
     })
 
     graph.add_edge("Clarification",  "IntentAgent")
+    graph.add_edge("QueryNode", END)
     graph.add_edge("ConfigAgent",    "ValidationAgent")
 
     graph.add_conditional_edges("ValidationAgent", route_after_validation, {

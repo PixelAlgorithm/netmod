@@ -34,6 +34,13 @@ def _json_load(value: str | None):
     return json.loads(value)
 
 
+def _normalize_hostname(hostname: str | None) -> str | None:
+    if hostname is None:
+        return None
+    raw = str(hostname).replace("hostname", "").strip()
+    return raw if raw and raw != "None" else None
+
+
 def init_db():
     """Create tables if they don't exist."""
     _ensure_intent_store_file()
@@ -104,6 +111,7 @@ def save_device_snapshot(device_host, hostname, vlans,
                          interfaces, acls, routes, raw_running_config):
     """Insert a new device snapshot row."""
     init_db()
+    hostname = _normalize_hostname(hostname)
     with _connect() as conn:
         conn.execute(
             """
@@ -150,13 +158,17 @@ def get_latest_snapshot(device_host: str) -> dict | None:
     return {
         "host": row[0],
         "device_host": row[0],
-        "hostname": row[1],
+        "hostname": _normalize_hostname(row[1]),
         "snapshot_time": row[2],
         "vlans": _json_load(row[3]),
         "interfaces": _json_load(row[4]),
         "acls": _json_load(row[5]),
         "routes": _json_load(row[6]),
         "raw_running_config": row[7],
+        "recent_intents": [
+            f"{intent['timestamp']} {intent['intent_type']} ({intent['status']})"
+            for intent in get_deployed_intents(device_host)[:5]
+        ],
     }
 
 

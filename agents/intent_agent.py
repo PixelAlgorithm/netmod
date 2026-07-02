@@ -1,4 +1,5 @@
 import json
+import re
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import interrupt
@@ -85,6 +86,14 @@ all traffic to that destination in general terms equivalent to "any".
 
 DECISION PROCESS
 
+IMPORTANT: If the user's request is asking to VIEW, SHOW, LIST,
+CHECK, or DISPLAY the current network state — for example "show me
+the network", "what VLANs exist", "what ACLs are configured",
+"show current state", "what is on the device", "display interfaces"
+— you MUST return intent_type "query_state" with status "ready"
+immediately. Never ask clarification questions for query_state
+requests. Never classify a read-only query as any other intent_type.
+
 Step 1:
 Analyze the user's networking request.
 
@@ -138,6 +147,8 @@ ALLOWED intent_type VALUES
 - dhcp_configuration
 - dns_configuration
 - mixed_intent
+- query_state   (READ ONLY — user wants to view current network
+                state, no configuration changes)
 
 EXAMPLES
 
@@ -305,6 +316,42 @@ Output:
   ]
 }
 
+User:
+Show me the current network state of the device
+
+Output:
+
+{
+  "status": "ready",
+  "intent": {
+    "intent_type": "query_state",
+    "network_objects": [],
+    "actions": [],
+    "constraints": [],
+    "security_policies": [],
+    "deployment_target": "",
+    "description": "Read-only query of current network state."
+  }
+}
+
+User:
+What ACLs, VLANs, and interfaces are currently configured on the device?
+
+Output:
+
+{
+  "status": "ready",
+  "intent": {
+    "intent_type": "query_state",
+    "network_objects": [],
+    "actions": [],
+    "constraints": [],
+    "security_policies": [],
+    "deployment_target": "",
+    "description": "Read-only query of configured ACLs, VLANs, and interfaces."
+  }
+}
+
 IMPORTANT
 
 Return ONLY valid JSON.
@@ -318,7 +365,49 @@ Do NOT wrap JSON inside ```json.
 Your response must begin with { and end with }."""
 
 
+def _latest_human_message(state: AgentState) -> str:
+    for message in reversed(state["messages"]):
+        if isinstance(message, HumanMessage):
+            return message.content.strip()
+    return ""
+
+
+def _is_query_state_request(text: str) -> bool:
+    lowered = text.lower()
+    query_verbs = ("show", "view", "list", "check", "display", "what")
+    state_terms = (
+        "current network state",
+        "network state",
+        "what vlans",
+        "which vlans",
+        "what acls",
+        "which acls",
+        "interfaces",
+        "what is on the device",
+        "what's on the device",
+        "current state",
+        "configured on the device",
+    )
+    return any(verb in lowered for verb in query_verbs) and any(term in lowered for term in state_terms)
+
+
 def intent_agent(state : AgentState)-> AgentState:
+    latest_request = _latest_human_message(state)
+    if _is_query_state_request(latest_request):
+        state["structured_intent"] = {
+            "status": "ready",
+            "intent": {
+                "intent_type": "query_state",
+                "network_objects": [],
+                "actions": [],
+                "constraints": [],
+                "security_policies": [],
+                "deployment_target": "",
+                "description": "Read-only query of current network state."
+            }
+        }
+        return state
+
     system_prompt = SystemMessage(content=prompt)
     memory_prompt = SystemMessage(
         content=(
@@ -359,14 +448,11 @@ def intent_agent(state : AgentState)-> AgentState:
     
 
 def route_intent(state):
-    status = state["structured_intent"]["status"]
-
-    if status == "needs_clarification":
+    if state["structured_intent"]["status"] == "needs_clarification":
         return "clarification"
-
-    if status == "clarification_complete":
-        return "ready"
-
+    intent_type = state["structured_intent"].get("intent", {}).get("intent_type", "")
+    if intent_type == "query_state":
+        return "query"
     return "ready"
 
 def clarification_node(state: AgentState) -> AgentState:
