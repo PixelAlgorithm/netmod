@@ -25,6 +25,7 @@ giving up and letting the escalation path take over.
 """
 
 import json
+import re as _re
 from langchain_core.messages import HumanMessage, SystemMessage
 from agents.common import MAX_TOTAL_ATTEMPTS, invoke_model
 
@@ -36,6 +37,9 @@ You will be given:
 2. The exact validation errors or Batfish parse warnings that caused the failure.
 3. The structured intent (JSON) that the config is supposed to implement.
 4. The current network memory summary.
+5. "actual_device_hostname": the real hostname of the target device
+   extracted from network memory. Use this as the hostname value
+   when fixing "No hostname set" errors. Never use deployment_target.
 
 YOUR TASK:
 Fix ONLY the specific issues identified in the failure_context.
@@ -55,7 +59,11 @@ STRICT RULES:
 - When in doubt about a fix, remove the offending line rather than guessing.
 
 COMMON FIXES:
-- "No hostname set" → add: hostname <deployment_target | default NETWORK-DEVICE>
+- "No hostname set" → look for the hostname in network_memory_summary
+  (it appears as "Device <hostname> at <host>"). Use that hostname.
+  If not found in memory summary, use "NETWORK-DEVICE" as the default.
+  NEVER use deployment_target as the hostname value — deployment_target
+  is a device type string like "cisco_ios", not a hostname.
 - "ip default-gateway inside interface block" → move it outside or remove it
 - "unrecognized syntax" on an ACL line → check wildcard mask format
 - "access-list X permit ip any internet" → replace "internet" with "any"
@@ -111,6 +119,11 @@ def repair_agent(state: dict) -> dict:
     failure_context = state.get("failure_context", "")
     broken_config = state.get("config", "")
     intent = state["structured_intent"].get("intent", {})
+    memory_summary = state.get("network_memory_summary", "")
+    hostname_match = _re.search(r"^Device (\S+) at", memory_summary)
+    actual_hostname = hostname_match.group(1) if hostname_match else "NETWORK-DEVICE"
+    if actual_hostname in ("None", "unknown", ""):
+        actual_hostname = "NETWORK-DEVICE"
 
     print(f"  [repair_agent] attempt {total_attempts}/{MAX_TOTAL_ATTEMPTS}")
     print(f"  [repair_agent] fixing: {failure_context[:120]}{'...' if len(failure_context) > 120 else ''}")
@@ -121,7 +134,8 @@ def repair_agent(state: dict) -> dict:
             "broken_config": broken_config,
             "failure_context": failure_context,
             "structured_intent": intent,
-            "network_memory_summary": state.get("network_memory_summary", ""),
+            "network_memory_summary": memory_summary,
+            "actual_device_hostname": actual_hostname,
         }, indent=2))
     ]
 

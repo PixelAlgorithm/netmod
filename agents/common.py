@@ -1,5 +1,5 @@
 from typing import TypedDict, Annotated
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 from langgraph.graph.message import add_messages
 from langchain_aws import ChatBedrock
 from langchain_openai import ChatOpenAI
@@ -43,6 +43,11 @@ else:
 def invoke_model(messages):
     try:
         return model.invoke(messages)
+    except EndpointConnectionError as exc:
+        raise RuntimeError(
+            "Unable to reach the LLM endpoint. Check your internet/DNS connection "
+            "or Bedrock endpoint access, then retry."
+        ) from exc
     except ClientError as exc:
         error_code = exc.response.get("Error", {}).get("Code", "Unknown")
         if error_code in {"UnrecognizedClientException", "InvalidClientTokenId", "ExpiredTokenException"}:
@@ -50,5 +55,13 @@ def invoke_model(messages):
                 "Bedrock authentication failed. Check AWS_ACCESS_KEY_ID, "
                 "AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN (if using temporary credentials), "
                 "and AWS_DEFAULT_REGION in .env."
+            ) from exc
+        raise
+    except Exception as exc:
+        error_text = str(exc)
+        if "NameResolutionError" in error_text or "Failed to resolve" in error_text:
+            raise RuntimeError(
+                "Unable to reach the LLM endpoint. Check your internet/DNS connection "
+                "or Bedrock endpoint access, then retry."
             ) from exc
         raise

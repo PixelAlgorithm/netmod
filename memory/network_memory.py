@@ -1,7 +1,17 @@
 import re
 from copy import deepcopy
+from datetime import datetime, timezone
 
-from memory.network_store import build_memory_summary, get_latest_snapshot, init_db
+from langgraph.types import interrupt
+
+from device_client import open_device_connection
+from memory.network_store import (
+    build_memory_summary,
+    get_deployed_intents,
+    get_latest_snapshot,
+    init_db,
+    save_device_snapshot,
+)
 from settings import MissingEnvironmentError, get_device_settings
 
 
@@ -194,6 +204,71 @@ def _summarize_memory(memory: dict) -> str:
     return "\n".join(summary_lines)
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _pull_live_snapshot(device_settings) -> dict | None:
+    """
+    SSH into device, run show commands, parse, save to SQLite.
+    Returns a device_dict on success, None on failure.
+    Logs errors but does not raise.
+    """
+    connection = None
+    try:
+        connection = open_device_connection(device_settings)
+        running_config = connection.send_command("show running-config", read_timeout=30)
+        access_lists = connection.send_command("show ip access-lists", read_timeout=30)
+        vlan_brief = connection.send_command("show vlan brief", read_timeout=30)
+        interface_brief = connection.send_command("show ip interface brief", read_timeout=30)
+        routes_output = connection.send_command("show ip route", read_timeout=30)
+        connection.send_command("show version", read_timeout=30)
+        topology_output = connection.send_command("show cdp neighbors detail", read_timeout=30)
+
+        hostname = _parse_hostname(running_config)
+        vlans = _parse_vlans(vlan_brief)
+        interfaces = _parse_interfaces(interface_brief)
+        acls = _parse_acls(access_lists)
+        routes = _parse_routes(routes_output)
+        topology_links = _parse_topology(topology_output)
+        snapshot_time = _utc_now()
+
+        save_device_snapshot(
+            device_host=device_settings.host,
+            hostname=hostname,
+            vlans=vlans,
+            interfaces=interfaces,
+            acls=acls,
+            routes=routes,
+            raw_running_config=running_config,
+        )
+
+        device_dict = {
+            "host": device_settings.host,
+            "hostname": hostname,
+            "vlans": vlans,
+            "interfaces": interfaces,
+            "acls": acls,
+            "routes": routes,
+            "topology": {"links": topology_links},
+            "snapshot_time": snapshot_time,
+            "recent_intents": [
+                f"{i['timestamp']} {i['intent_type']} ({i['status']})"
+                for i in get_deployed_intents(device_settings.host)[:5]
+            ],
+        }
+        return device_dict
+    except Exception as exc:
+        print(f"  [network_memory] live SSH pull failed: {exc}")
+        return None
+    finally:
+        if connection is not None:
+            try:
+                connection.disconnect()
+            except Exception:
+                pass
+
+
 class NetworkMemory:
     def __init__(self, device_host: str | None = None):
         init_db()
@@ -246,9 +321,6 @@ class NetworkMemory:
 
 
 def load_network_memory_node(state: dict) -> dict:
-    if state.get("network_memory") and state.get("network_memory_summary"):
-        return state
-
     try:
         device_settings = get_device_settings()
     except MissingEnvironmentError:
@@ -256,9 +328,42 @@ def load_network_memory_node(state: dict) -> dict:
         state["network_memory_summary"] = state.get("network_memory_summary", "")
         return state
 
-    memory_manager = NetworkMemory(device_settings.host)
-    state["network_memory"] = memory_manager.snapshot()
-    state["network_memory_summary"] = memory_manager.summary()
+    live_device = _pull_live_snapshot(device_settings)
+    if live_device is not None:
+        state["network_memory"] = {"devices": [live_device]}
+        state["network_memory_summary"] = _summarize_memory(state["network_memory"])
+        return state
+
+    latest_snapshot = get_latest_snapshot(device_settings.host)
+    last_snapshot_time = latest_snapshot.get("snapshot_time") if latest_snapshot else None
+    warning = (
+        f"Device unreachable: unable to pull live state from {device_settings.host}\n"
+        f"Last snapshot: {last_snapshot_time or 'never'}\n"
+        "Options: (r)retry  (c)continue with cached data  (a)abort\n"
+        "Your choice: "
+    )
+    print(
+        f"  [network_memory] warning: device unreachable, "
+        f"last snapshot={last_snapshot_time or 'never'}"
+    )
+    choice = interrupt(warning).strip().lower()
+
+    if choice in {"r", "retry"}:
+        live_device = _pull_live_snapshot(device_settings)
+        if live_device is not None:
+            state["network_memory"] = {"devices": [live_device]}
+            state["network_memory_summary"] = _summarize_memory(state["network_memory"])
+            return state
+
+    if choice in {"a", "abort"}:
+        raise SystemExit(1)
+
+    if latest_snapshot:
+        state["network_memory"] = {"devices": [latest_snapshot]}
+        state["network_memory_summary"] = build_memory_summary(device_settings.host)
+    else:
+        state["network_memory"] = {}
+        state["network_memory_summary"] = "No network memory available."
 
     return state
 
@@ -269,7 +374,17 @@ def update_network_memory_node(state: dict) -> dict:
     except MissingEnvironmentError:
         return state
 
-    memory_manager = NetworkMemory(device_settings.host)
-    state["network_memory"] = memory_manager.snapshot()
-    state["network_memory_summary"] = memory_manager.summary()
+    live_device = _pull_live_snapshot(device_settings)
+    if live_device is not None:
+        state["network_memory"] = {"devices": [live_device]}
+        state["network_memory_summary"] = _summarize_memory(state["network_memory"])
+        return state
+
+    latest_snapshot = get_latest_snapshot(device_settings.host)
+    if latest_snapshot:
+        state["network_memory"] = {"devices": [latest_snapshot]}
+        state["network_memory_summary"] = build_memory_summary(device_settings.host)
+    else:
+        state["network_memory"] = {}
+        state["network_memory_summary"] = "No network memory available."
     return state

@@ -1,5 +1,6 @@
 import os
 import json
+import uuid
 
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -22,7 +23,7 @@ except ModuleNotFoundError:
     SqliteSaver = None
 
 DB_PATH = "memory/ibn_checkpoints.db"
-THREAD_ID = "ibn-session-1"
+THREAD_ID = f"ibn-session-{uuid.uuid4().hex[:8]}"
 
 
 def human_review_node(state: dict) -> dict:
@@ -47,6 +48,28 @@ def query_node(state: dict) -> dict:
         print("\n[No network memory available yet — run a deployment first]")
     state["deployment_result"] = "query_complete: read-only state displayed"
     return state
+
+
+def _print_banner(device_host: str, snapshot_time: str | None) -> None:
+    width = 60
+    print("\n" + "─" * width)
+    print(" IBN Orchestration System")
+    print(" Autonomous Intent-Based Networking")
+    print("─" * width)
+    print(f" Connected to: {device_host}")
+    if snapshot_time:
+        print(f" Last snapshot: {snapshot_time}")
+    else:
+        print(" Last snapshot: No prior snapshot")
+    print()
+    print(" What would you like to configure?")
+    print(" Examples:")
+    print("   • Create VLAN 30 for finance with subnet 192.168.30.0/24")
+    print("   • Block traffic from 10.0.20.0/24 to 10.0.30.0/24")
+    print("   • Show current network state")
+    print("   • Add a static route to 172.20.0.0/16 via 192.168.1.254")
+    print()
+    print(" Type your intent below:")
 
 
 def build_graph() -> StateGraph:
@@ -133,11 +156,30 @@ def _initial_state(user_input: str) -> dict:
 
 
 def _run_with_interrupts(compiled_app, initial_state: dict, config: dict):
-    result = compiled_app.invoke(initial_state, config=config)
+    try:
+        result = compiled_app.invoke(initial_state, config=config)
+    except RuntimeError as exc:
+        print(f"\nStartup failed: {exc}")
+        raise SystemExit(1)
 
     while "__interrupt__" in result:
-        answer = input("Your answer: ")
-        result = compiled_app.invoke(Command(resume=answer), config=config)
+        interrupt_data = result["__interrupt__"][0].value
+        if isinstance(interrupt_data, dict):
+            q_num = interrupt_data.get("question_number", "?")
+            total = interrupt_data.get("total_questions", "?")
+            question = interrupt_data.get("question", str(interrupt_data))
+            print(f"\n  [{q_num}/{total}] {question}")
+        elif isinstance(interrupt_data, str) and interrupt_data.startswith("Device unreachable"):
+            print(f"\n  ⚠  {interrupt_data}")
+            print("     (r) retry   (c) continue with cached   (a) abort")
+        else:
+            print(f"\n  {interrupt_data}")
+        answer = input("  > ").strip()
+        try:
+            result = compiled_app.invoke(Command(resume=answer), config=config)
+        except RuntimeError as exc:
+            print(f"\nStartup failed: {exc}")
+            raise SystemExit(1)
 
     return result
 
@@ -155,13 +197,20 @@ if __name__ == "__main__":
 
         with SqliteSaver.from_conn_string(DB_PATH) as checkpointer:
             app = compile_app(checkpointer=checkpointer)
-            saved_state = app.get_state(config)
-            if saved_state.next:
-                print("\n[Resuming checkpointed session]")
-                result = _run_with_interrupts(app, None, config=config)
-            else:
-                user_input = input("what u like to create : ")
-                result = _run_with_interrupts(app, _initial_state(user_input), config=config)
+            try:
+                device_settings = get_device_settings()
+                latest = get_latest_snapshot(device_settings.host)
+                _print_banner(
+                    device_host=device_settings.host,
+                    snapshot_time=latest.get("snapshot_time") if latest else None,
+                )
+            except MissingEnvironmentError:
+                _print_banner(
+                    device_host="unknown",
+                    snapshot_time=None,
+                )
+            user_input = input("> ").strip()
+            result = _run_with_interrupts(app, _initial_state(user_input), config=config)
     except RuntimeError as exc:
         print(f"\nStartup failed: {exc}")
         raise SystemExit(1)

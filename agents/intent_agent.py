@@ -352,6 +352,18 @@ Output:
   }
 }
 
+User:
+Remove all devices in the network
+
+Output:
+
+{
+  "status": "needs_clarification",
+  "questions": [
+    "This appears to be a destructive bulk operation. Could you clarify which specific ACL, VLAN, route, or interface you would like to remove?"
+  ]
+}
+
 IMPORTANT
 
 Return ONLY valid JSON.
@@ -370,6 +382,30 @@ def _latest_human_message(state: AgentState) -> str:
         if isinstance(message, HumanMessage):
             return message.content.strip()
     return ""
+
+
+DESTRUCTIVE_TERMS = (
+    "remove all", "delete all", "wipe", "factory reset",
+    "erase all", "clear all", "reset all", "destroy",
+)
+
+
+def _is_destructive_request(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in DESTRUCTIVE_TERMS)
+
+
+def _answered_destructive_question(state: AgentState) -> bool:
+    for index in range(len(state["messages"]) - 1):
+        current_message = state["messages"][index]
+        next_message = state["messages"][index + 1]
+        if (
+            isinstance(current_message, AIMessage)
+            and isinstance(next_message, HumanMessage)
+            and "destructive bulk operation" in current_message.content.lower()
+        ):
+            return True
+    return False
 
 
 def _is_query_state_request(text: str) -> bool:
@@ -391,8 +427,59 @@ def _is_query_state_request(text: str) -> bool:
     return any(verb in lowered for verb in query_verbs) and any(term in lowered for term in state_terms)
 
 
+def _device_supports_vlans(network_memory: dict) -> bool:
+    """
+    Check if the device supports VLAN creation.
+    Routers (no existing user VLANs, no switchport interfaces) do not.
+    Catalyst 8000v running as router does not support vlan database commands.
+    """
+    devices = network_memory.get("devices", [])
+    if not devices:
+        return True
+    device = devices[0]
+    vlans = device.get("vlans", [])
+    user_vlans = [v for v in vlans if v.get("id") not in (1, 1002, 1003, 1004, 1005)]
+    interfaces = device.get("interfaces", [])
+    has_switchport = any(
+        "GigabitEthernet" in i.get("name", "") and
+        i.get("ip_address") is None
+        for i in interfaces
+    )
+    return bool(user_vlans) or has_switchport
+
+
 def intent_agent(state : AgentState)-> AgentState:
     latest_request = _latest_human_message(state)
+    if _is_destructive_request(latest_request) and not _answered_destructive_question(state):
+        state["structured_intent"] = {
+            "status": "needs_clarification",
+            "questions": [
+                "This request appears to be a destructive bulk operation "
+                "(e.g. removing all devices or configurations). This system "
+                "manages individual network objects safely. Could you clarify "
+                "exactly which specific ACL, VLAN, route, or interface you "
+                "would like to remove?"
+            ]
+        }
+        return state
+
+    vlan_keywords = ("vlan", "layer 2", "layer2", "l2", "switchport")
+    vlan_create_keywords = ("create", "add", "configure", "make", "set up", "setup")
+    lowered_req = latest_request.lower()
+    if (any(k in lowered_req for k in vlan_keywords) and
+            any(k in lowered_req for k in vlan_create_keywords) and
+            not _device_supports_vlans(state.get("network_memory", {}))):
+        state["structured_intent"] = {
+            "status": "needs_clarification",
+            "questions": [
+                "The connected device (Catalyst 8000v) appears to be running "
+                "in router mode and does not support VLAN database commands. "
+                "VLAN creation requires a Layer 2 switch. Would you like to "
+                "configure an ACL, static route, or other feature instead?"
+            ]
+        }
+        return state
+
     if _is_query_state_request(latest_request):
         state["structured_intent"] = {
             "status": "ready",

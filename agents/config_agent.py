@@ -62,10 +62,8 @@ def config_agent(state: dict) -> dict:
     intent_type = intent["intent_type"]
     devices = state.get("network_memory", {}).get("devices", [])
     raw_hostname = devices[0].get("hostname") if devices else None
-    # Guard against Python None and the literal string "None" that
-    # the hostname parser returns when the device hasn't been named yet.
-    # Jinja's default() filter only triggers on Python None/undefined,
-    # not on the string "None", so we must convert it here.
+    # _normalize_hostname in network_store already strips "None" strings,
+    # but guard here too in case state was populated before that fix.
     current_hostname = raw_hostname if (raw_hostname and raw_hostname != "None") else None
 
     # 1. Select template

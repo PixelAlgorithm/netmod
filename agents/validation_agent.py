@@ -167,13 +167,24 @@ def syntax_check(template_name: str, rendered_config: str) -> tuple[bool, list[s
     uses_bang_closer = bool(re.search(r"^\s*!\s*$", template_source, re.MULTILINE))
 
     if uses_bang_closer:
-        opens = sum(1 for l in lines if l.strip() and not l.strip().startswith("!") and not l.startswith(" "))
-        closers = sum(1 for l in lines if l.strip() == "!")
-        # Only flag if the config uses numbered ACL or block styles that
-        # actually need '!' closers. Named extended ACLs (ip access-list
-        # extended ...) are closed implicitly by dedentation — no '!' needed.
         has_named_acl = any("ip access-list" in l for l in lines)
-        if closers == 0 and opens > 0 and not has_named_acl:
+        has_interface_block = any(l.strip().lower().startswith("interface") for l in lines)
+        BANG_CLOSER_OPENERS = (
+            "ip dhcp pool",
+            "router ospf",
+            "router bgp",
+            "router eigrp",
+            "router rip",
+            "zone security",
+            "ip vrf",
+            "vrf definition",
+        )
+        bang_opens = sum(
+            1 for l in lines
+            if any(l.strip().lower().startswith(opener) for opener in BANG_CLOSER_OPENERS)
+        )
+        closers = sum(1 for l in lines if l.strip() == "!")
+        if bang_opens > 0 and closers == 0 and not has_named_acl:
             errors.append("template uses '!' block closers but rendered config has none")
 
     # Check for obviously broken Jinja leftovers (unrendered {{ }} or {% %})
